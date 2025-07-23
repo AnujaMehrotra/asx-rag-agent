@@ -1,0 +1,15 @@
+# Python artifacts
+__pycache__/
+*.pyc
+
+# Virtual environment
+venv/
+.venv/
+
+# Environment variables
+.env
+
+# Data files and indexes
+data/*.pdf
+data/*.txt          # optional: if you want to keep only .txt from ingestion, remove this line
+data/faiss_index/
