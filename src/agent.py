@@ -1,73 +1,63 @@
 import os
-from dotenv import load_dotenv
-from langchain.embeddings import OpenAIEmbeddings
-from langchain.vectorstores import FAISS
+from langchain.chat_models import ChatOpenAI
 from langchain.chains import RetrievalQA
-from langchain.llms import OpenAI
-from langchain.prompts import PromptTemplate
+from langchain.vectorstores import FAISS
+from langchain.embeddings import OpenAIEmbeddings
+from guardrails import Guard
 
-from openai import OpenAI as OpenAIClient
-# Load environment variables
+# Load API key
+from dotenv import load_dotenv
 load_dotenv()
-api_key = os.getenv("OPENAI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-if not api_key:
-    raise ValueError("OPENAI_API_KEY not found. Make sure it's in your .env file.")
+# Load vector store
+embeddings = OpenAIEmbeddings()
+vectorstore = FAISS.load_local("data/faiss_index", embeddings, allow_dangerous_deserialization=True)
+retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 3})
 
-# Setup OpenAI client
-openai_client = OpenAIClient()
+# Load LLM and chain
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+qa_chain = RetrievalQA.from_chain_type(llm=llm, retriever=retriever)
 
-VECTOR_DB_PATH = "data/faiss_index"
+# Load guardrails schema
+guard = Guard.from_rail("guardrails.xml")  # Adjust if needed
 
-# Guardrail prompt template
-template = """
-You are a helpful assistant answering questions ONLY based on the provided bank annual report documents.
-If the question is unrelated to the documents, respond: "Sorry, I can only answer questions about these bank reports."
-Avoid speculation or generating information not in the documents.
+# --- Moderation ---
+def moderate_question(query: str) -> bool:
+    from openai import OpenAI
+    client = OpenAI()
+    response = client.moderations.create(input=query)
+    return response.results[0].flagged
 
-Question: {question}
-=========
-{context}
-=========
-Answer:"""
+# --- Main Agent ---
+def run_agent(query: str):
+    # Step 1: Moderation check
+    if moderate_question(query):
+        print("⚠️ Your query was flagged by moderation. Please rephrase.")
+        return
 
-PROMPT = PromptTemplate(template=template, input_variables=["question", "context"])
+    # Step 2: Run QA chain (use invoke instead of run)
+    result = qa_chain.invoke({"query": query})
+    llm_response = result["result"]  # this gives the string answer
 
-def moderate_question(question):
-    response = openai_client.moderations.create(input=question)
-    flagged = response["results"][0]["flagged"]
-    return flagged
+    # Step 3: Validate with Guardrails
+    try:
+        guard.validate(
+            queries={"query": query},
+            llm_output=llm_response  # Pass just the string, not a dict
+        )
+    except Exception as e:
+        print(f"⛔️ Guardrail triggered: {e}")
+        return
 
-def main():
-    print("Loading vector store...")
-    embeddings = OpenAIEmbeddings()
-    vectorstore = FAISS.load_local(VECTOR_DB_PATH, embeddings, allow_dangerous_deserialization=True)
+    # Step 4: Output
+    print("🤖 Answer:")
+    print(llm_response)
 
-    retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 3})
-
-    # LLM with guardrails: deterministic and limited response length
-    llm = OpenAI(temperature=0, max_tokens=500)
-
-    qa_chain = RetrievalQA.from_chain_type(
-        llm=llm,
-        retriever=retriever,
-        chain_type="stuff",
-        chain_type_kwargs={"prompt": PROMPT},
-    )
-
-    print("Ready for questions! Type 'exit' to quit.")
-    while True:
-        query = input("\nEnter your question: ")
-        if query.lower() in ["exit", "quit"]:
-            print("Goodbye!")
-            break
-
-        if moderate_question(query):
-            print("Sorry, your question violates usage policies. Try a different question.")
-            continue
-
-        answer = qa_chain.run(query)
-        print("\nAnswer:\n", answer)
-
+# --- CLI ---
 if __name__ == "__main__":
-    main()
+    while True:
+        user_query = input("\nAsk a question about the Big 4 Australian banks (or type 'exit'):\n> ")
+        if user_query.lower() == "exit":
+            break
+        run_agent(user_query)

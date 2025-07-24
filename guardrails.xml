@@ -1,0 +1,33 @@
+<rail version="0.1">
+
+  <input>
+    <string name="query"
+            description="User query about one or more of Australia's Big 4 banks: CBA, ANZ, NAB, or Westpac."
+            on-fail="exception"
+            on-fail-message="Only queries about Australia's Big 4 banks (CBA, ANZ, NAB, Westpac) are allowed.">
+      <validation>
+        <python>
+          <![CDATA[
+allowed_banks = {"cba", "commonwealth", "anz", "nab", "national australia bank", "westpac"}
+query_lower = query.lower()
+
+mentioned_banks = [bank for bank in allowed_banks if bank in query_lower]
+
+if not mentioned_banks:
+    raise Exception("You must mention at least one of the Big 4 Australian banks: CBA, ANZ, NAB, or Westpac.")
+
+# Optional: block non-Big 4 names
+for word in query_lower.split():
+    if "bank" in word and all(b not in word for b in allowed_banks):
+        raise Exception("Only Australia's Big 4 banks are supported: CBA, ANZ, NAB, and Westpac.")
+          ]]>
+        </python>
+      </validation>
+    </string>
+  </input>
+
+  <output>
+  <string name="answer" description="Answer to the user's validated query." />
+</output>
+
+</rail>
